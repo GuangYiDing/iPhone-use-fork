@@ -1,5 +1,11 @@
 # 更新记录
 
+## 未发布
+
+- 新增 `transport` 配置：`auto`（默认）、`usb`、`network`。设备转发与屏幕流共用新的选路脚本：USB 走 usbmux 的数据线记录，Wi-Fi 走 Xcode 运行 WDA 期间保持的 CoreDevice 加密隧道（地址由 devicectl 报告）。`auto` 在 usbmux 列出数据线时走 USB，否则走隧道，每个新连接重新选择。不使用 usbmux 的网络记录：它是局域网明文 TCP，真机验收中手机锁屏后即消失且无法恢复。README 补充无线配对步骤、实测延迟与安全说明。
+- 修改 `transport` 不再要求重新构建：构建指纹不含 transport，升级前的构建继续有效。
+- doctor 与 discover 返回 `forward_paths`（`usb` / `wifi` / `tunnel`），配置的路径不可用时给出对应提示。转发日志记录 `Device path` 切换；隧道未建立、端口未就绪等错误改为可读信息，相关提示语不再假定 USB。
+
 ## 0.3.15 — 2026-10-16
 
 - 新增无参数 `pua_screenshot` 工具，通过 WDA HID 事件触发 iOS 系统截屏，截图直接存入 iPhone 相册；复用操作锁、锁屏检查和不确定动作不重放规则。
