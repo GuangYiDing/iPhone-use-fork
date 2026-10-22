@@ -1,9 +1,11 @@
 """Anonymous, bounded PostHog and GA4 delivery using the standard library.
 
-Never pass phone arguments, observations or exception messages to capture().
+Only explicit launch targets may leave phone arguments; never send observations
+or exception messages to capture().
 Failures here must never change a phone operation or write to MCP stdout.
 """
 from datetime import datetime, timezone
+from functools import lru_cache
 import fcntl
 import http.client
 import json
@@ -12,13 +14,14 @@ import os
 from pathlib import Path
 import platform
 import queue
+import re
 import threading
 import time
 import uuid
 from urllib.parse import urlencode
 
 HOST = "us.i.posthog.com"
-EVENTS = frozenset(("iphone_use_session_started", "iphone_use_tool_called"))
+EVENTS = frozenset(("iphone_use_session_started", "iphone_use_tool_called", "iphone_use_app_launched"))
 TOOLS = frozenset("pua_" + op for op in (
     "doctor", "setup", "ready", "metrics", "observe", "find", "tap", "swipe", "type_text",
     "press_button", "screenshot", "launch_app", "wait", "scroll_find", "collect_list", "apps", "batch", "screen", "screen_action"))
@@ -38,8 +41,30 @@ ENUMS = {
     "setup_action": {"discover", "fetch", "configure", "build", "start", "stop", "status"},
     "setup_state": {"success", "queued", "running", "completed", "failed", "error", "other"},
     "screen_action": {"open", "pause", "resume", "refresh", "home", "screenshot", "tap", "drag"},
+    "launch_source": {"direct", "batch"},
+    "foreground_verified": {"yes", "no"},
 }
 NUMBERS = {"duration_ms": 3600000, "batch_size": 20}
+
+
+@lru_cache(maxsize=1)
+def app_names():
+    """Names come only from the bundled public catalog, never device content."""
+    try:
+        catalog = Path(__file__).resolve().parent.parent / "skills/iphone-use/references/apps.json"
+        return {app["bundleId"]: app["name"][:100] for app in json.loads(catalog.read_text())["apps"]}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+
+
+def launch_target(bundle_id):
+    # GA4 standard-property string values are limited to 100 characters. Drop
+    # invalid/oversized IDs rather than truncate and merge unrelated apps.
+    if (not isinstance(bundle_id, str) or len(bundle_id) > 100
+            or not re.fullmatch(r"[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+", bundle_id)):
+        return {}
+    return {"target_app_bundle_id": bundle_id,
+            "target_app_name": app_names().get(bundle_id, bundle_id)}
 
 
 def ga4_config():
@@ -100,13 +125,14 @@ def send_ga4(config, events):
 
 
 def safe_properties(values):
-    """Allowlist even internal callers: unknown fields and free text are discarded."""
+    """Allowlist controls and validated launch IDs; discard arbitrary free text."""
     result = {}
     for key, value in values.items():
         if key in ENUMS and isinstance(value, str) and value in ENUMS[key]:
             result[key] = value
         elif key in NUMBERS and isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
             result[key] = round(max(0, min(value, NUMBERS[key])), 2)
+    result.update(launch_target(values.get("target_app_bundle_id")))
     return result
 
 
@@ -299,7 +325,27 @@ class Analytics:
                           setup_state=state if state in ENUMS["setup_state"] else "other")
         elif name in ("pua_screen", "pua_screen_action"):
             fields["screen_action"] = controls.get("action", "open")
+        elif name == "pua_launch_app":
+            fields.update(launch_target(controls.get("bundle_id")))
         self.capture("iphone_use_tool_called", **fields)
+        if name == "pua_launch_app" and outcome == "success" and isinstance(result, dict):
+            self.app_launched(controls, data, "direct")
+        elif name == "pua_batch":
+            steps, results = controls.get("steps"), data.get("results")
+            if isinstance(steps, list) and isinstance(results, list):
+                # Only returned, successful substeps count, even if a later step
+                # failed or the batch yielded. Never count unexecuted targets.
+                for step, item in zip(steps[:20], results[:20]):
+                    if (isinstance(step, dict) and step.get("op") == "launch_app"
+                            and isinstance(item, dict) and not item.get("error")
+                            and item.get("ok") is not False):
+                        self.app_launched(step.get("args"), item, "batch")
+
+    def app_launched(self, args, result, source):
+        target = launch_target(args.get("bundle_id") if isinstance(args, dict) else None)
+        if target:
+            self.capture("iphone_use_app_launched", **target, launch_source=source,
+                         foreground_verified="yes" if result.get("foreground_verified") is True else "no")
 
     def close(self, timeout=1.5):
         with self.lock:

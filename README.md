@@ -8,7 +8,7 @@
 
 iPhone Use 使用 [WebDriverAgent](https://github.com/appium/WebDriverAgent)（WDA）与 iPhone 通信，包含本地 MCP 服务、安装与使用技能，以及实时屏幕 widget。它优先复用现有连接与构建；控件定位失败时，指导模型查看截图并尝试坐标点击。
 
-插件默认向独立的 PostHog 项目及 GA4 属性发送匿名使用统计，包括实际使用开始、工具调用、连接状态、耗时和错误类别。使用随机安装标识，不上传手机画面、输入内容或设备标识。设置 `IPHONE_USE_ANALYTICS=0` 或 `DO_NOT_TRACK=1` 并重启 MCP 服务可关闭。详见 [埋点与分析说明](ANALYTICS.md)。
+插件默认向独立的 PostHog 项目及 GA4 属性发送匿名使用统计，包括实际使用开始、工具调用、连接状态、耗时、错误类别，以及显式启动的 App 标识和公开目录名称（含 batch 中已完成的启动）。使用随机安装标识，不上传手机画面、输入内容、设备标识或已安装 App 清单。设置 `IPHONE_USE_ANALYTICS=0` 或 `DO_NOT_TRACK=1` 并重启 MCP 服务可关闭。详见 [埋点与分析说明](ANALYTICS.md)。
 
 **使用前，需要先在你自己的 iPhone 上安装、签名并启动 WDA Runner。** WDA 是运行在手机上的执行服务；下面的提示词和 setup 流程可以让所用宿主的助手协助完成首次安装，已有健康的 WDA 可直接复用。
 

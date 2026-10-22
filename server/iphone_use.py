@@ -26,8 +26,8 @@ import wda_image
 from analytics import Analytics
 
 PUAError=WDAError
-VERSION="0.3.15"
-SCREEN_URI="ui://iphone-use/phone-0.3.15.html"
+VERSION="0.3.16"
+SCREEN_URI="ui://iphone-use/phone-0.3.16.html"
 # Codex scopes reuse to the host, chat, server and UI resource. A stable result
 # ID keeps repeated READY/open/pause/resume calls in that chat on one panel,
 # including after the MCP process reconnects; no device identifiers are needed.

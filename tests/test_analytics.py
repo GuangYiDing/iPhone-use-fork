@@ -240,6 +240,70 @@ class AnalyticsTests(unittest.TestCase):
             self.assertGreater(event["params"]["engagement_time_msec"], 0)
         self.assertEqual(ga4_payload(self.events)["client_id"], payload["client_id"])
 
+    def test_launch_targets_are_sanitized_and_names_come_from_public_catalog(self):
+        analytics = self.analytics()
+        analytics.tool_result("pua_launch_app", {"bundle_id": "com.tencent.xin", "text": "private"},
+                              {"foreground_verified": True, "tree": "private"}, 12)
+        analytics.tool_result("pua_launch_app", {"bundle_id": "com.example.Unlisted"},
+                              {"foreground_verified": False}, 13)
+        analytics.tool_result("pua_launch_app", {"bundle_id": "com.apple.Preferences"}, None, 14, "http_error")
+        analytics.close()
+        launches = [e for e in self.events if e["event"] == "iphone_use_app_launched"]
+        self.assertEqual(len(launches), 2)
+        self.assertEqual(launches[0]["properties"]["target_app_name"], "微信")
+        self.assertEqual(launches[0]["properties"]["foreground_verified"], "yes")
+        self.assertEqual(launches[1]["properties"]["target_app_name"], "com.example.Unlisted")
+        self.assertEqual(launches[1]["properties"]["foreground_verified"], "no")
+        self.assertEqual({e["properties"]["launch_source"] for e in launches}, {"direct"})
+        self.assertNotIn("private", json.dumps(self.events))
+        for invalid in (None, 12, "private text", "com.example\n", "com." + "x" * 100):
+            self.assertEqual(safe_properties({"target_app_bundle_id": invalid,
+                                             "target_app_name": "private"}), {})
+        clean = safe_properties({"target_app_bundle_id": "com.tencent.xin", "target_app_name": "private"})
+        self.assertEqual(clean["target_app_name"], "微信")
+        payload = ga4_payload(self.events)
+        self.assertEqual(len(payload["events"]), len(self.events))
+        for event in payload["events"]:
+            self.assertLessEqual(len(event["params"]), 25)
+        self.assertEqual([e["params"]["active_use"] for e in payload["events"]
+                          if e["name"] == "iphone_use_app_launched"], ["no", "no"])
+
+    def test_batch_launches_count_only_returned_successful_steps(self):
+        analytics = self.analytics()
+        steps = [{"op": "launch_app", "args": {"bundle_id": "com.tencent.xin"}},
+                 {"op": "tap", "args": {"text": "private"}},
+                 {"op": "launch_app", "args": {"bundle_id": "com.tencent.xin"}},
+                 {"op": "launch_app", "args": {"bundle_id": "com.example.unexecuted"}}]
+        # Repeated launches are separate operations; a later failed launch is
+        # absent from results and must never contribute to the distribution.
+        analytics.tool_result("pua_batch", {"steps": steps},
+                              {"results": [{"foreground_verified": True}, {}, {"foreground_verified": False}],
+                               "completed_steps": 3, "complete": False, "error": {"code": "http_error"}}, 45)
+        analytics.tool_result("pua_batch", {"steps": steps}, None, 1, "invalid_argument")
+        analytics.close()
+        launches = [e["properties"] for e in self.events if e["event"] == "iphone_use_app_launched"]
+        self.assertEqual(len(launches), 2)
+        self.assertEqual([e["foreground_verified"] for e in launches], ["yes", "no"])
+        self.assertEqual({e["launch_source"] for e in launches}, {"batch"})
+        self.assertNotIn("unexecuted", json.dumps(self.events))
+        self.assertEqual(sum(e["event"] == "iphone_use_tool_called" for e in self.events), 2)
+
+    def test_launch_event_delivery_to_both_providers_and_optout(self):
+        ga4_events = []
+        analytics = Analytics(self.directory, VERSION, sender=lambda token, events: (self.events.extend(events) or 200),
+                              token="test", ga4={"measurementId": "G-TEST", "apiSecret": "test"},
+                              ga4_sender=lambda config, events: (ga4_events.extend(events) or 204))
+        self.addCleanup(analytics.close)
+        with patch.dict(os.environ, {"DO_NOT_TRACK": "1"}):
+            analytics.tool_result("pua_launch_app", {"bundle_id": "com.tencent.xin"}, {}, 1)
+        self.assertFalse(self.events)
+        self.assertFalse(ga4_events)
+        self.assertFalse((self.directory / "analytics-id").exists())
+        analytics.tool_result("pua_launch_app", {"bundle_id": "com.tencent.xin"}, {}, 1)
+        analytics.close()
+        self.assertEqual([e["uuid"] for e in self.events], [e["uuid"] for e in ga4_events])
+        self.assertEqual(sum(e["event"] == "iphone_use_app_launched" for e in ga4_events), 1)
+
     def test_ga4_independent_delivery_has_no_retries_or_idle_events(self):
         release, waiting = threading.Event(), threading.Event()
         def posthog(token, events):

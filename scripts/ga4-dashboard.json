@@ -12,7 +12,11 @@
     "environment": "customDimensionsGroup2Slot08",
     "version": "customDimensionsGroup2Slot09",
     "platform": "customDimensionsGroup2Slot10",
-    "active": "customDimensionsGroup2Slot11"
+    "active": "customDimensionsGroup2Slot11",
+    "target_app_bundle_id": "customDimensionsGroup2Slot12",
+    "target_app_name": "customDimensionsGroup2Slot13",
+    "launch_source": "customDimensionsGroup2Slot14",
+    "foreground_verified": "customDimensionsGroup2Slot15"
   },
   "reports": [
     {
@@ -663,6 +667,192 @@
       },
       "associatedCards": [],
       "associatedCardsToDelete": []
+    },
+    {
+      "report": {
+        "id": "16181877443",
+        "name": "iPhone Use｜App 使用分布",
+        "cards": [
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "01｜App 启动明细（次数 / 安装数）",
+              "type": 65,
+              "selectedDimension": [
+                {
+                  "id": "customDimensionsGroup2Slot13"
+                }
+              ],
+              "selectedMetric": [
+                {
+                  "id": "eventCount"
+                },
+                {
+                  "id": "totalUsers"
+                }
+              ],
+              "filter": [],
+              "positioning": {
+                "x": 0,
+                "y": 0,
+                "width": 47,
+                "height": 28
+              }
+            }
+          },
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "02｜App bundle ID 明细（次数 / 安装数）",
+              "type": 65,
+              "selectedDimension": [
+                {
+                  "id": "customDimensionsGroup2Slot12"
+                }
+              ],
+              "selectedMetric": [
+                {
+                  "id": "eventCount"
+                },
+                {
+                  "id": "totalUsers"
+                }
+              ],
+              "filter": [],
+              "positioning": {
+                "x": 48,
+                "y": 0,
+                "width": 47,
+                "height": 28
+              }
+            }
+          },
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "03｜App 启动次数占比",
+              "type": 73,
+              "selectedDimension": [
+                {
+                  "id": "customDimensionsGroup2Slot13"
+                }
+              ],
+              "selectedMetric": [
+                {
+                  "id": "eventCount"
+                }
+              ],
+              "filter": [],
+              "positioning": {
+                "x": 0,
+                "y": 29,
+                "width": 47,
+                "height": 28
+              }
+            }
+          },
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "04｜App 每日启动趋势",
+              "type": 72,
+              "selectedDimension": [
+                {
+                  "id": "customDimensionsGroup2Slot13"
+                }
+              ],
+              "selectedMetric": [
+                {
+                  "id": "eventCount"
+                }
+              ],
+              "filter": [],
+              "positioning": {
+                "x": 48,
+                "y": 29,
+                "width": 47,
+                "height": 28
+              }
+            }
+          },
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "05｜单次 / batch 启动来源",
+              "type": 73,
+              "selectedDimension": [
+                {
+                  "id": "customDimensionsGroup2Slot14"
+                }
+              ],
+              "selectedMetric": [
+                {
+                  "id": "eventCount"
+                }
+              ],
+              "filter": [],
+              "positioning": {
+                "x": 0,
+                "y": 58,
+                "width": 47,
+                "height": 28
+              }
+            }
+          },
+          {
+            "card": {
+              "id": 182,
+              "innerTitle": "06｜启动前台核验状态",
+              "type": 73,
+              "selectedDimension": [
+                {
+                  "id": "customDimensionsGroup2Slot15"
+                }
+              ],
+              "selectedMetric": [
+                {
+                  "id": "eventCount"
+                }
+              ],
+              "filter": [],
+              "positioning": {
+                "x": 48,
+                "y": 58,
+                "width": 47,
+                "height": 28
+              }
+            }
+          }
+        ],
+        "reportType": 7,
+        "globalFilters": [
+          {
+            "fieldName": "customDimensionsGroup2Slot08",
+            "expression": "production",
+            "evaluationType": 3,
+            "complement": false,
+            "type": 1,
+            "expressionList": [
+              "production"
+            ],
+            "isCaseSensitive": true
+          },
+          {
+            "type": 1,
+            "fieldName": "eventName",
+            "evaluationType": 3,
+            "expression": "iphone_use_app_launched",
+            "expressionList": [
+              "iphone_use_app_launched"
+            ],
+            "complement": false,
+            "isCaseSensitive": true
+          }
+        ],
+        "layoutType": 1
+      },
+      "associatedCards": [],
+      "associatedCardsToDelete": []
     }
   ],
   "calculatedMetrics": [
@@ -676,6 +866,7 @@
   "collectionId": "16139662949",
   "reportUrls": {
     "usage": "https://analytics.google.com/analytics/web/#/a268077887p559245431/reports/builder/16139658463?params=_u..nav%3Dmaui&ruid=2155EAED-6065-415E-A58D-379B0208AC98&collectionId=16139662949",
-    "reliability": "https://analytics.google.com/analytics/web/#/a268077887p559245431/reports/builder/16139666921?params=_u..nav%3Dmaui&ruid=52AE58B4-1D21-4B73-9C7E-3D7C4948FC8C&collectionId=16139662949"
+    "reliability": "https://analytics.google.com/analytics/web/#/a268077887p559245431/reports/builder/16139666921?params=_u..nav%3Dmaui&ruid=52AE58B4-1D21-4B73-9C7E-3D7C4948FC8C&collectionId=16139662949",
+    "app_usage": "https://analytics.google.com/analytics/web/#/a268077887p559245431/reports/builder/16181877443?params=_u..nav%3Dmaui&ruid=A3E90B07-F923-43D4-B5B0-D0947D74DD06&collectionId=16139662949"
   }
 }

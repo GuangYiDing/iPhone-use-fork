@@ -24,10 +24,16 @@ directly via Measurement Protocol; Google receives the network connection and
 may derive coarse geography from the request IP. No IP override or phone location
 is included. Advertising data use and ad personalization are explicitly denied.
 
-Phone text, selectors, accessibility trees, screenshots, clipboard data, app
-bundle IDs, UDIDs, signing teams, filesystem paths, MCP request IDs and exception
+Phone text, selectors, accessibility trees, screenshots, clipboard data,
+UDIDs, signing teams, filesystem paths, MCP request IDs and exception
 messages are never sent. Only known tools, actions, states and error codes are
 accepted; unknown errors become `other`.
+
+Explicit launch targets are collected as `target_app_bundle_id` (validated bundle
+ID, at most 100 characters) and `target_app_name` (bundled public catalog name,
+falling back to the ID). Device-provided App names, installed-App inventories,
+foreground observations and App contents are never uploaded. This additive
+instrumentation starts with client version `0.3.16` and does not backfill history.
 
 Set either environment variable on the MCP server and restart it to disable
 analytics completely, including local analytics identity creation:
@@ -59,12 +65,26 @@ Run standalone test commands with `IPHONE_USE_ANALYTICS=0` as well.
 | --- | --- | --- |
 | `iphone_use_session_started` | Once per MCP process, on the first tracked Runtime call's result | Common properties only |
 | `iphone_use_tool_called` | Exactly once after a known tool finishes or raises, for MCP and direct Runtime/CLI calls | `tool_name`, `outcome`, `error_code`, `duration_ms`; `batch_size` for batches; `ready_state` for READY; `setup_action`, `setup_state` for setup; `screen_action` for preview controls and gestures |
+| `iphone_use_app_launched` | Once per successfully returned explicit launch, including completed launch substeps in a batch | `target_app_bundle_id`, `target_app_name`, `launch_source` (`direct` / `batch`), `foreground_verified` (`yes` / `no`) |
 
 `pua_screen_frame` polling and `pua_screen_action(action="viewport")` geometry
 recovery are excluded entirely, including failures; neither starts a usage session.
-Preview tap/drag and toolbar actions still count once. Batch substeps are not
-double-counted. A process's first tracked call emits one usage-start event plus its
-tool event; later calls emit only their tool event.
+Preview tap/drag and toolbar actions still count once. Batch substeps do not emit
+additional tool-call events. A process's first tracked call emits one usage-start
+event plus its tool event; later calls emit only their tool event, with dedicated
+launch events as described below.
+
+Launch calls additionally emit `iphone_use_app_launched`. Direct launch tool
+events also carry the target fields for failure diagnostics. Only the dedicated
+event is used for App distributions, preventing double counting. Repeated
+successful launches count separately. A completed launch still counts when a
+later batch step fails or yields; failed and unexecuted launch steps do not count.
+An activation followed by a failed verification/observation is excluded because
+the launch did not successfully return. Default launches are optimistic;
+`foreground_verified=yes` requires a successful foreground check. These counts
+measure explicit launch operations, not foreground time or task completion.
+App launches do not add another `active_use=yes` event in GA4. The existing
+schema version stays at `2` so legacy READY/setup dashboard filters still match.
 
 Versions before `0.3.13` also emitted `iphone_use_ready_result`,
 `iphone_use_setup_result` and `iphone_use_screen_action`. These dedicated events
@@ -103,6 +123,16 @@ development events remain available in Activity but are excluded from these
 charts. These are project-specific definitions, not team-approved Data Catalog
 metrics.
 
+The existing dashboard now has 20 insights. App insights 17–20 append launch-count
+and distinct-installation tables (with both name and bundle ID), a launch-share
+pie and daily launches by App. Total-value installation tables deduplicate over
+the selected period, not by summing daily installations. Names come from the
+bundled catalog; the ID disambiguates Apps with the same name. The share chart
+uses launch counts, so frequent launches contribute more than one-off launches.
+An installation may use several Apps, so per-App installation counts are not
+additive. All four use only `iphone_use_app_launched` and `environment=production`.
+See PostHog's [breakdown documentation](https://posthog.com/docs/product-analytics/trends/breakdowns).
+
 ## Delivery limits
 
 PostHog queues bounded events in memory on a daemon worker, at most 256 waiting
@@ -134,7 +164,7 @@ GA4 only. Local overrides can go in `server/ga4.local.json` (same keys as the
 bundled config); that file is ignored and excluded from both packages. The global
 `IPHONE_USE_ANALYTICS=0` and `DO_NOT_TRACK=1` controls disable **both** providers.
 
-GA4 receives the exact same two logical events as PostHog. The random installation
+GA4 receives the exact same logical events as PostHog. The random installation
 UUID is deterministically encoded as a numeric dotted `client_id`; a positive
 numeric `session_id` is derived from the random process UUID. Neither identifier
 comes from a phone, Google account or chat. The same event UUID is supplied as
@@ -155,7 +185,8 @@ can apply its own inactivity rules; use the `iphone_use_session_started` event
 count for actual-used MCP processes (subject to delivery loss).
 
 Event-scoped dimensions register tool, outcome, error, READY/setup/screen state,
-environment, plugin version, host platform and `active_use`. The latter is a
+environment, plugin version, host platform, `active_use`, `target_app_bundle_id`,
+`target_app_name`, `launch_source` and `foreground_verified`. `active_use` is a
 derived yes/no flag on existing GA4 events: yes means a successful task or READY
 call, excluding doctor, setup, metrics and both preview tools. It creates no
 extra events and uses the same active-installation definition as PostHog.
@@ -169,10 +200,20 @@ lost to the PostHog billing cap.
 
 ### Published GA4 dashboards
 
-Both reports are published to all property users in **Reports → Custom dashboards**:
+All three reports are published to all property users in **Reports → Custom dashboards**:
 
 - [iPhone Use｜使用概览](https://analytics.google.com/analytics/web/#/a268077887p559245431/reports/builder/16139658463?params=_u..nav%3Dmaui&ruid=2155EAED-6065-415E-A58D-379B0208AC98&collectionId=16139662949)
 - [iPhone Use｜稳定性与接入](https://analytics.google.com/analytics/web/#/a268077887p559245431/reports/builder/16139666921?params=_u..nav%3Dmaui&ruid=52AE58B4-1D21-4B73-9C7E-3D7C4948FC8C&collectionId=16139662949)
+- [iPhone Use｜App 使用分布](https://analytics.google.com/analytics/web/#/a268077887p559245431/reports/builder/16181877443?params=_u..nav%3Dmaui&ruid=A3E90B07-F923-43D4-B5B0-D0947D74DD06&collectionId=16139662949)
+
+The App report includes two data tables (name and bundle ID), each showing launch
+event count and distinct installations (`totalUsers`), plus launch-share, daily
+launches, direct/batch source and foreground-verification charts. Every card
+inherits `environment=production` AND `eventName=iphone_use_app_launched`.
+The new dimensions use event slots 12–15. No historical App breakdown is available
+before client version `0.3.16`; newly registered dimensions can take 24–48 hours
+to populate. GA4's App-name table may combine equal public catalog names; use the
+bundle-ID table to distinguish them.
 
 | Usage overview | Reliability and onboarding |
 | --- | --- |

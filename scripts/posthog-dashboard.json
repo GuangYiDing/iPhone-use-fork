@@ -424,6 +424,310 @@
           "display": "ActionsBarValue"
         }
       }
+    },
+    {
+      "id": 13164100,
+      "shortId": "BRYqbDl8",
+      "tileId": 14049226,
+      "name": "17｜App 启动次数明细",
+      "description": "按目标 App 名称统计成功返回的显式启动次数，含 batch 已完成子步骤；默认乐观返回不保证已核验前台。生产环境，最近30天；仅新客户端开始采集。",
+      "query": {
+        "breakdownFilter": {
+          "breakdown_limit": 100,
+          "breakdown_type": "event",
+          "breakdowns": [
+            {
+              "property": "target_app_name",
+              "type": "event"
+            },
+            {
+              "property": "target_app_bundle_id",
+              "type": "event"
+            }
+          ]
+        },
+        "dateRange": {
+          "date_from": "-30d",
+          "excludeIncompletePeriods": false,
+          "explicitDate": false
+        },
+        "filterTestAccounts": false,
+        "interval": "day",
+        "kind": "TrendsQuery",
+        "properties": [
+          {
+            "key": "environment",
+            "operator": "exact",
+            "type": "event",
+            "value": [
+              "production"
+            ]
+          }
+        ],
+        "series": [
+          {
+            "event": "iphone_use_app_launched",
+            "kind": "EventsNode",
+            "math": "total"
+          }
+        ],
+        "trendsFilter": {
+          "aggregationAxisFormat": "numeric",
+          "display": "ActionsTable",
+          "excludeBoxPlotOutliers": true,
+          "hideWeekends": false,
+          "legendPosition": "bottom",
+          "metricColorByDirection": false,
+          "metricShowChange": true,
+          "metricSummary": "total",
+          "resultCustomizationBy": "value",
+          "showAlertThresholdLines": false,
+          "showAnnotations": true,
+          "showLegend": false,
+          "showMultipleYAxes": false,
+          "showPercentStackView": false,
+          "showValuesOnSeries": false,
+          "smoothingIntervals": 1,
+          "stackBreakdownValues": false,
+          "yAxisScaleType": "linear",
+          "yAxisStartAtZero": true
+        },
+        "version": 4
+      },
+      "layouts": {
+        "sm": {
+          "h": 6,
+          "w": 8,
+          "x": 0,
+          "y": 58
+        }
+      }
+    },
+    {
+      "id": 13164102,
+      "shortId": "OSB2PBLZ",
+      "tileId": 14049228,
+      "name": "18｜App 使用安装数明细",
+      "description": "按 App 统计整个所选期间的去重匿名安装数。一次安装可使用多个 App，各行相加不等于总安装数。含单次和 batch 成功启动，默认乐观返回。",
+      "query": {
+        "breakdownFilter": {
+          "breakdown_limit": 100,
+          "breakdown_type": "event",
+          "breakdowns": [
+            {
+              "property": "target_app_name",
+              "type": "event"
+            },
+            {
+              "property": "target_app_bundle_id",
+              "type": "event"
+            }
+          ]
+        },
+        "dateRange": {
+          "date_from": "-30d",
+          "excludeIncompletePeriods": false,
+          "explicitDate": false
+        },
+        "filterTestAccounts": false,
+        "interval": "day",
+        "kind": "TrendsQuery",
+        "properties": [
+          {
+            "key": "environment",
+            "operator": "exact",
+            "type": "event",
+            "value": [
+              "production"
+            ]
+          }
+        ],
+        "series": [
+          {
+            "event": "iphone_use_app_launched",
+            "kind": "EventsNode",
+            "math": "dau"
+          }
+        ],
+        "trendsFilter": {
+          "aggregationAxisFormat": "numeric",
+          "display": "ActionsTable",
+          "excludeBoxPlotOutliers": true,
+          "hideWeekends": false,
+          "legendPosition": "bottom",
+          "metricColorByDirection": false,
+          "metricShowChange": true,
+          "metricSummary": "total",
+          "resultCustomizationBy": "value",
+          "showAlertThresholdLines": false,
+          "showAnnotations": true,
+          "showLegend": false,
+          "showMultipleYAxes": false,
+          "showPercentStackView": false,
+          "showValuesOnSeries": false,
+          "smoothingIntervals": 1,
+          "stackBreakdownValues": false,
+          "yAxisScaleType": "linear",
+          "yAxisStartAtZero": true
+        },
+        "version": 4
+      },
+      "layouts": {
+        "sm": {
+          "h": 6,
+          "w": 6,
+          "x": 0,
+          "y": 64
+        }
+      }
+    },
+    {
+      "id": 13164104,
+      "shortId": "fGxWz1ie",
+      "tileId": 14049230,
+      "name": "19｜App 启动次数占比",
+      "description": "各 App 在成功返回的显式启动次数中的占比；含 batch 已完成启动，非手机前台时长或已安装 App 分布。只统计 production。",
+      "query": {
+        "breakdownFilter": {
+          "breakdown_limit": 25,
+          "breakdown_type": "event",
+          "breakdowns": [
+            {
+              "property": "target_app_name",
+              "type": "event"
+            }
+          ]
+        },
+        "dateRange": {
+          "date_from": "-30d",
+          "excludeIncompletePeriods": false,
+          "explicitDate": false
+        },
+        "filterTestAccounts": false,
+        "interval": "day",
+        "kind": "TrendsQuery",
+        "properties": [
+          {
+            "key": "environment",
+            "operator": "exact",
+            "type": "event",
+            "value": [
+              "production"
+            ]
+          }
+        ],
+        "series": [
+          {
+            "event": "iphone_use_app_launched",
+            "kind": "EventsNode",
+            "math": "total"
+          }
+        ],
+        "trendsFilter": {
+          "aggregationAxisFormat": "numeric",
+          "display": "ActionsPie",
+          "excludeBoxPlotOutliers": true,
+          "hideWeekends": false,
+          "legendPosition": "bottom",
+          "metricColorByDirection": false,
+          "metricShowChange": true,
+          "metricSummary": "total",
+          "resultCustomizationBy": "value",
+          "showAlertThresholdLines": false,
+          "showAnnotations": true,
+          "showLegend": true,
+          "showMultipleYAxes": false,
+          "showPercentStackView": false,
+          "showValuesOnSeries": false,
+          "smoothingIntervals": 1,
+          "stackBreakdownValues": false,
+          "yAxisScaleType": "linear",
+          "yAxisStartAtZero": true
+        },
+        "version": 4
+      },
+      "layouts": {
+        "sm": {
+          "h": 6,
+          "w": 4,
+          "x": 8,
+          "y": 58
+        }
+      }
+    },
+    {
+      "id": 13164105,
+      "shortId": "b9pDWD2e",
+      "tileId": 14049231,
+      "name": "20｜App 每日启动趋势",
+      "description": "按 App 查看每日成功返回的显式启动次数。只统计 production；新客户端部署后开始采集，不回填历史。",
+      "query": {
+        "breakdownFilter": {
+          "breakdown_limit": 25,
+          "breakdown_type": "event",
+          "breakdowns": [
+            {
+              "property": "target_app_name",
+              "type": "event"
+            }
+          ]
+        },
+        "dateRange": {
+          "date_from": "-30d",
+          "excludeIncompletePeriods": false,
+          "explicitDate": false
+        },
+        "filterTestAccounts": false,
+        "interval": "day",
+        "kind": "TrendsQuery",
+        "properties": [
+          {
+            "key": "environment",
+            "operator": "exact",
+            "type": "event",
+            "value": [
+              "production"
+            ]
+          }
+        ],
+        "series": [
+          {
+            "event": "iphone_use_app_launched",
+            "kind": "EventsNode",
+            "math": "total"
+          }
+        ],
+        "trendsFilter": {
+          "aggregationAxisFormat": "numeric",
+          "display": "ActionsLineGraph",
+          "excludeBoxPlotOutliers": true,
+          "hideWeekends": false,
+          "legendPosition": "bottom",
+          "metricColorByDirection": false,
+          "metricShowChange": true,
+          "metricSummary": "total",
+          "resultCustomizationBy": "value",
+          "showAlertThresholdLines": false,
+          "showAnnotations": true,
+          "showLegend": true,
+          "showMultipleYAxes": false,
+          "showPercentStackView": false,
+          "showValuesOnSeries": false,
+          "smoothingIntervals": 1,
+          "stackBreakdownValues": false,
+          "yAxisScaleType": "linear",
+          "yAxisStartAtZero": true
+        },
+        "version": 4
+      },
+      "layouts": {
+        "sm": {
+          "h": 6,
+          "w": 6,
+          "x": 6,
+          "y": 64
+        }
+      }
     }
   ]
 }
