@@ -1,5 +1,5 @@
 import net from 'node:net';
-import {connectDevicePort, parseTransport} from './device-path.mjs';
+import {RELAY_CLOSED_EARLY, RELAY_PATH, connectDevicePort, parseTransport} from './device-path.mjs';
 
 const [udid, localArgument = '18100', deviceArgument = '8100', transportArgument = 'auto'] = process.argv.slice(2);
 if (!/^[A-Za-z0-9-]{8,64}$/.test(udid ?? '')) throw new Error('Provide a valid device UDID.');
@@ -22,7 +22,8 @@ const server = net.createServer(async client => {
   client.on('close', () => sockets.delete(client));
   try {
     // Each client connection picks its path again, so transport=auto follows
-    // the cable being unplugged or plugged back in.
+    // the cable being unplugged or plugged back in, and reaches Shelley's
+    // relay when neither the cable nor the CoreDevice tunnel is there.
     const {socket: remote, path} = await connectDevicePort(udid, devicePort, transport);
     if (stopping || client.destroyed) { remote.destroy(); return; }
     if (path !== currentPath) {
@@ -31,7 +32,16 @@ const server = net.createServer(async client => {
     }
     remote.setNoDelay?.(true);
     sockets.add(remote);
-    remote.on('error', error => { console.error(`device socket: ${error.message}`); client.destroy(); });
+    let reported = false;
+    const relayClosedEarly = () => {
+      // Shelley's tunnel accepts and closes at once while no phone WDA is
+      // behind it; the device side ending without a byte is that case.
+      if (reported || path !== RELAY_PATH || remote.bytesRead > 0) return;
+      reported = true;
+      console.error(RELAY_CLOSED_EARLY);
+    };
+    remote.on('end', relayClosedEarly);
+    remote.on('error', error => { relayClosedEarly(); console.error(`device socket: ${error.message}`); client.destroy(); });
     remote.on('close', () => { sockets.delete(remote); client.destroy(); });
     client.on('close', () => remote.destroy());
     client.pipe(remote).pipe(client);

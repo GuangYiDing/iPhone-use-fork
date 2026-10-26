@@ -67,6 +67,10 @@ class ForwardTransportTests(unittest.TestCase):
             self.tunnel_port = self.device(b"TUNL", "::1")
         except OSError:
             self.skipTest("IPv6 loopback is unavailable.")
+        # Shelley's relay "device" is a loopback port on this Mac. By default the
+        # forward is pointed at a closed port, never at a real tunnel on 18101.
+        self.relay_port = self.device(b"RLAY", "127.0.0.1")
+        self.closed_relay = self.closed_port()
 
     def device(self, name, host):
         family = socket.AF_INET6 if ":" in host else socket.AF_INET
@@ -87,6 +91,29 @@ class ForwardTransportTests(unittest.TestCase):
         threading.Thread(target=serve, daemon=True).start()
         return listener.getsockname()[1]
 
+    @staticmethod
+    def closed_port(host="127.0.0.1"):
+        family = socket.AF_INET6 if ":" in host else socket.AF_INET
+        with socket.socket(family) as probe:
+            probe.bind((host, 0))
+            return probe.getsockname()[1]
+
+    def empty_relay(self):
+        """Shelley's tunnel with no phone behind it: accepts and closes at once."""
+        listener = socket.create_server(("127.0.0.1", 0))
+        self.addCleanup(listener.close)
+
+        def serve():
+            while True:
+                try:
+                    client, _ = listener.accept()
+                except OSError:
+                    return
+                client.close()
+
+        threading.Thread(target=serve, daemon=True).start()
+        return listener.getsockname()[1]
+
     def set_paths(self, records=(), core=None):
         self.records.write_text(json.dumps(list(records)))
         if core is None:
@@ -94,14 +121,14 @@ class ForwardTransportTests(unittest.TestCase):
         else:
             self.devicectl.write_text(json.dumps(core))
 
-    def forward(self, transport, device_port=None):
-        with socket.socket() as probe:
-            probe.bind(("127.0.0.1", 0))
-            port = probe.getsockname()[1]
+    def forward(self, transport, device_port=None, relay_port=None, relay_device_port=None):
+        port = self.closed_port()
+        device_port = device_port or self.tunnel_port
         env = dict(os.environ, PATH=self.path, STUB_RECORDS=str(self.records), STUB_TARGETS=json.dumps(self.targets),
-                   STUB_DEVICECTL=str(self.devicectl))
+                   STUB_DEVICECTL=str(self.devicectl), WDA_RELAY_PORT=str(relay_port or self.closed_relay),
+                   WDA_RELAY_DEVICE_PORT=str(relay_device_port or device_port))
         process = subprocess.Popen([shutil.which("node"), str(self.runtime / "forward.mjs"), UDID, str(port),
-                                    str(device_port or self.tunnel_port), transport],
+                                    str(device_port), transport],
                                    env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.addCleanup(self.kill, process)
         self.assertTrue(select.select([process.stdout], [], [], 5)[0], "forward did not start")
@@ -165,11 +192,12 @@ class ForwardTransportTests(unittest.TestCase):
 
     def test_tunnel_problems_are_reported_readably(self):
         process, port = self.forward("auto")
-        cases = [(core_device(state="disconnected", address=None), "No USB record or CoreDevice tunnel for the configured "
-                                                                     "iPhone (transport=auto): tunnelState=disconnected."),
-                 (core_device(udid="OTHER-PHONE-0001"), "CoreDevice does not list it."),
+        relay = f"nothing listens at 127.0.0.1:{self.closed_relay} (Shelley's WDA tunnel is not running: shelley-cli serve --relay)."
+        cases = [(core_device(state="disconnected", address=None), "No USB record, CoreDevice tunnel or Shelley relay tunnel "
+                                                                     "for the configured iPhone (transport=auto): tunnelState=disconnected; " + relay),
+                 (core_device(udid="OTHER-PHONE-0001"), "CoreDevice does not list it; " + relay),
                  # A host name is refused, so the address can never trigger a lookup.
-                 (core_device(address="tunnel.example"), "no IPv6 tunnel address."),
+                 (core_device(address="tunnel.example"), "no IPv6 tunnel address; " + relay),
                  (None, "devicectl failed:")]
         for core, expected in cases:
             self.set_paths([], core)
@@ -192,7 +220,66 @@ class ForwardTransportTests(unittest.TestCase):
         result = subprocess.run([shutil.which("node"), str(self.runtime / "forward.mjs"), UDID, "18100", "8100", "wifi"],
                                 stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Transport must be one of: auto, usb, network.", result.stderr)
+        self.assertIn("Transport must be one of: auto, usb, network, relay.", result.stderr)
+        self.assertNotIn("listening", result.stdout)
+
+    def test_auto_reaches_the_relay_only_when_cable_and_tunnel_are_missing(self):
+        self.set_paths([record(2, "Network")], core_device(state="disconnected", address=None))
+        process, port = self.forward("auto", relay_port=self.relay_port)
+        self.assertEqual(self.through(port), b"RLAY")
+        # The cable wins again as soon as usbmux lists it, and the tunnel beats the relay.
+        self.set_paths([record(1, "USB")], core_device(state="disconnected", address=None))
+        self.assertEqual(self.through(port), b"USB1")
+        self.set_paths([], core_device())
+        self.assertEqual(self.through(port), b"TUNL")
+        out, err = self.finish(process)
+        self.assertEqual([line for line in out.splitlines() if line.startswith("Device path:")],
+                         ["Device path: Shelley relay tunnel", "Device path: USB", "Device path: CoreDevice tunnel (localNetwork)"])
+        self.assertEqual(err, "")
+
+    def test_relay_uses_only_the_relay(self):
+        self.set_paths([record(1, "USB")], core_device())
+        process, port = self.forward("relay", relay_port=self.relay_port)
+        self.assertEqual(self.through(port), b"RLAY")
+        self.assertEqual(self.through(port), b"RLAY")
+        out, err = self.finish(process)
+        self.assertEqual([line for line in out.splitlines() if line.startswith("Device path:")], ["Device path: Shelley relay tunnel"])
+        self.assertEqual(err, "")
+
+    def test_relay_that_is_not_listening_names_the_missing_step(self):
+        self.set_paths([record(1, "USB")], core_device())
+        process, port = self.forward("relay")
+        self.assertEqual(self.through(port), b"")
+        _, err = self.finish(process)
+        self.assertIn(f"Device connect failed: No Shelley relay tunnel (transport=relay): nothing listens at 127.0.0.1:{self.closed_relay} "
+                      "(Shelley's WDA tunnel is not running: shelley-cli serve --relay).", err)
+
+    def test_relay_without_a_phone_behind_it_is_reported_readably(self):
+        process, port = self.forward("relay", relay_port=self.empty_relay())
+        self.assertEqual(self.through(port), b"")
+        _, err = self.finish(process)
+        self.assertIn("Shelley relay tunnel closed the connection before answering: no iPhone WDA is connected through Shelley's relay "
+                      "(shelley-cli wda-launch), or the phone refused the stream", err)
+        self.assertNotIn("Device connect failed", err)
+
+    def test_relay_carries_only_the_wda_port(self):
+        # The MJPEG stream asks for 9100; the relay reaches WDA's own port only.
+        self.set_paths([], core_device(state="disconnected", address=None))
+        for transport, expected in (("relay", "Device connect failed: The Shelley relay tunnel cannot open device port 9100 (transport=relay): "
+                                              "the relay reaches device port 8100 only, not 9100 (WDA_RELAY_DEVICE_PORT)."),
+                                    ("auto", "(transport=auto): tunnelState=disconnected; the relay reaches device port 8100 only, not 9100 "
+                                             "(WDA_RELAY_DEVICE_PORT).")):
+            process, port = self.forward(transport, device_port=9100, relay_port=self.relay_port, relay_device_port=8100)
+            self.assertEqual(self.through(port), b"")
+            _, err = self.finish(process)
+            self.assertIn(expected, err)
+
+    def test_invalid_relay_port_is_rejected_before_listening(self):
+        env = dict(os.environ, WDA_RELAY_PORT="80")
+        result = subprocess.run([shutil.which("node"), str(self.runtime / "forward.mjs"), UDID, "18100", "8100", "relay"],
+                                env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=5)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("WDA_RELAY_PORT must be a port between 1024 and 65535.", result.stderr)
         self.assertNotIn("listening", result.stdout)
 
 

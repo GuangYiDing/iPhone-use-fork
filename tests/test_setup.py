@@ -6,6 +6,7 @@ import signal
 import socket
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch, MagicMock
@@ -101,7 +102,7 @@ class SetupTests(unittest.TestCase):
 
     def test_transport_defaults_to_auto_and_accepts_only_known_paths(self):
         self.assertEqual(self.configure()["config"]["transport"], "auto")
-        for transport in ("usb", "network", "auto"):
+        for transport in ("usb", "network", "relay", "auto"):
             self.assertEqual(self.configure(transport=transport)["config"]["transport"], transport)
         for transport in ("wifi", "USB", True, ["usb"]):
             self.assertFalse(self.configure(transport=transport)["ok"], transport)
@@ -116,7 +117,7 @@ class SetupTests(unittest.TestCase):
         wda_setup._write_json(self.manager.state_dir / "build.json", {
             "config_fingerprint": wda_setup._fingerprint(legacy), "commit": wda_setup.WDA_COMMIT,
         })
-        for transport in ("auto", "usb", "network"):
+        for transport in ("auto", "usb", "network", "relay"):
             self.assertTrue(self.configure(transport=transport)["ok"])
             self.manager._require_build(self.manager.config)
         self.assertTrue(self.configure(device_port=8101)["ok"])
@@ -125,18 +126,24 @@ class SetupTests(unittest.TestCase):
 
     def test_transport_failures_point_to_the_matching_path(self):
         # The exact lines tooling/device-path.mjs logs through the forward.
+        relay = "nothing listens at 127.0.0.1:18101 (Shelley's WDA tunnel is not running: shelley-cli serve --relay)."
         logs = {"usb": "No USB record for the configured iPhone (transport=usb).",
                 "network": "No CoreDevice tunnel to the configured iPhone (transport=network): tunnelState=disconnected.",
-                "auto": "No USB record or CoreDevice tunnel for the configured iPhone (transport=auto): CoreDevice does not list it."}
+                "auto": "No USB record, CoreDevice tunnel or Shelley relay tunnel for the configured iPhone (transport=auto): CoreDevice does not list it; " + relay,
+                "relay": "No Shelley relay tunnel (transport=relay): " + relay}
         for transport, log in logs.items():
             self.assertEqual(wda_setup._diagnose("Device connect failed: " + log), [wda_setup.TRANSPORT_HINTS[transport]], transport)
+        # The forward logs this after a relay connection that Shelley closed without a byte.
+        closed = "Shelley relay tunnel closed the connection before answering: no iPhone WDA is connected through Shelley's relay (shelley-cli wda-launch), or the phone refused the stream"
+        self.assertEqual(wda_setup._diagnose("device socket: read ECONNRESET\n" + closed), [wda_setup.TRANSPORT_HINTS["relay"]])
         for log in ("USB connection to device port 8100 failed: Connection was refused to port 8100",
-                    "CoreDevice tunnel connection to device port 8100 failed: the port is not listening yet"):
+                    "CoreDevice tunnel connection to device port 8100 failed: the port is not listening yet",
+                    "The Shelley relay tunnel cannot open device port 9100 (transport=relay): the relay reaches device port 8100 only, not 9100 (WDA_RELAY_DEVICE_PORT)."):
             self.assertEqual(wda_setup._diagnose("Device connect failed: " + log), [], log)
 
     def test_transport_hint_needs_a_path_the_transport_allows(self):
-        def paths(usb, wifi=False, tunnel=False):
-            return {"usb": usb, "wifi": wifi, "tunnel": tunnel}
+        def paths(usb, wifi=False, tunnel=False, relay=False):
+            return {"usb": usb, "wifi": wifi, "tunnel": tunnel, "relay": relay}
         hint = wda_setup._transport_hint
         self.assertIsNone(hint("usb", paths(True)))
         self.assertEqual(hint("usb", paths(False, wifi=True, tunnel=True)), wda_setup.TRANSPORT_HINTS["usb"])
@@ -145,7 +152,14 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(hint("network", paths(True)), wda_setup.TRANSPORT_HINTS["network"])
         self.assertIsNone(hint("auto", paths(True)))
         self.assertIsNone(hint("auto", paths(False, wifi=True)))
+        self.assertIsNone(hint("auto", paths(False, relay=True)))
         self.assertEqual(hint("auto", paths(False)), wda_setup.TRANSPORT_HINTS["auto"])
+        # The relay needs neither the cable nor CoreDevice, only a phone WDA behind Shelley's port.
+        self.assertIsNone(hint("relay", paths(False, relay=True)))
+        self.assertEqual(hint("relay", paths(True, wifi=True, tunnel=True)), wda_setup.TRANSPORT_HINTS["relay"])
+        self.assertEqual(hint("relay", paths(None)), wda_setup.TRANSPORT_HINTS["relay"])
+        # A listing made before the relay was probed does not break the hints.
+        self.assertIsNone(hint("auto", {"usb": True, "wifi": False, "tunnel": False}))
         # usbmuxd could not be queried: no cable-dependent hint, network is still known.
         self.assertIsNone(hint("usb", paths(None)))
         self.assertIsNone(hint("auto", paths(None)))
@@ -160,9 +174,47 @@ class SetupTests(unittest.TestCase):
         devices = wda_setup.SetupManager.parse_devices(document)
         self.assertEqual([device["tunnel_state"] for device in devices], ["connected", "disconnected"])
         cabled = {"PHONE-0001": False, "PHONE-0002": True}
-        self.assertEqual(wda_setup._forward_paths(devices[0], cabled), {"usb": False, "wifi": True, "tunnel": True})
-        self.assertEqual(wda_setup._forward_paths(devices[1], cabled), {"usb": True, "wifi": False, "tunnel": False})
-        self.assertEqual(wda_setup._forward_paths(devices[1], None), {"usb": None, "wifi": False, "tunnel": False})
+        self.assertEqual(wda_setup._forward_paths(devices[0], cabled), {"usb": False, "wifi": True, "tunnel": True, "relay": None})
+        self.assertEqual(wda_setup._forward_paths(devices[1], cabled), {"usb": True, "wifi": False, "tunnel": False, "relay": None})
+        self.assertEqual(wda_setup._forward_paths(devices[1], None), {"usb": None, "wifi": False, "tunnel": False, "relay": None})
+        # The relay is one port for the whole Mac, so every listed phone gets the same answer.
+        self.assertEqual(wda_setup._forward_paths(devices[1], None, True)["relay"], True)
+
+    def test_relay_state_tells_a_missing_tunnel_an_empty_one_and_a_phone_apart(self):
+        def listener(hold):
+            server = socket.create_server(("127.0.0.1", 0))
+            self.addCleanup(server.close)
+
+            def serve():
+                while True:
+                    try:
+                        client, _ = server.accept()
+                    except OSError:
+                        return
+                    if hold:
+                        # Shelley keeps the stream open and waits for the first request.
+                        with client:
+                            client.recv(1)
+                    else:
+                        client.close()
+
+            threading.Thread(target=serve, daemon=True).start()
+            return server.getsockname()[1]
+
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            closed = probe.getsockname()[1]
+        self.assertEqual(wda_setup.relay_state(closed), "off")
+        self.assertEqual(wda_setup.relay_state(listener(hold=False)), "waiting")
+        self.assertEqual(wda_setup.relay_state(listener(hold=True), timeout=0.2), "connected")
+
+    def test_relay_port_follows_the_forward_variable(self):
+        with patch.dict(os.environ, {"WDA_RELAY_PORT": "28101"}):
+            self.assertEqual(wda_setup.relay_port(), 28101)
+            self.assertEqual(wda_setup.relay_address(), "127.0.0.1:28101")
+        for value in ("80", "abc", ""):
+            with patch.dict(os.environ, {"WDA_RELAY_PORT": value}):
+                self.assertEqual(wda_setup.relay_port(), wda_setup.DEFAULT_RELAY_PORT, value)
 
     def fake_usbmuxd(self, reply):
         """Serve one usbmuxd exchange on a private Unix socket; returns its path and the request."""

@@ -49,14 +49,31 @@ def state_directory(explicit=None):
 ACTIVE_STATES = {"queued", "running"}
 # Paths for the device forward: usb is usbmux's cable record; network is the
 # CoreDevice tunnel Xcode keeps while the runner's session is active (Wi-Fi when
-# unplugged). auto uses the cable whenever usbmux lists it, the tunnel otherwise.
-TRANSPORTS = ("auto", "usb", "network")
+# unplugged); relay is Shelley's WDA tunnel on this Mac's loopback, which reaches
+# the phone's WDA through Shelley's relay server wherever the phone is. auto uses
+# the cable whenever usbmux lists it, then the tunnel, then the relay.
+TRANSPORTS = ("auto", "usb", "network", "relay")
 DEFAULT_TRANSPORT = "auto"
 USBMUXD_SOCKET = "/var/run/usbmuxd"
+RELAY_HOST = "127.0.0.1"
+DEFAULT_RELAY_PORT = 18101
+
+
+def relay_port():
+    """The loopback port of Shelley's WDA tunnel; the forward reads the same variable."""
+    value = os.environ.get("WDA_RELAY_PORT", "")
+    return int(value) if re.fullmatch(r"\d+", value) and 1024 <= int(value) <= 65535 else DEFAULT_RELAY_PORT
+
+
+def relay_address():
+    return f"{RELAY_HOST}:{relay_port()}"
+
+
 TRANSPORT_HINTS = {
     "usb": "usbmux does not list the iPhone on a USB cable (transport=usb). Reconnect the cable and unlock the iPhone, or configure transport=auto to allow the CoreDevice tunnel over Wi-Fi.",
     "network": "CoreDevice has no tunnel to the iPhone (transport=network). The tunnel appears while the PUA runner's Xcode session is active; if start stalls, keep the iPhone unlocked on the Mac's network and paired for wireless development (Xcode Devices and Simulators > Connect via network, set up once over USB).",
-    "auto": "The iPhone has neither a USB cable listed by usbmux nor a CoreDevice tunnel (transport=auto). Connect the cable, or keep the iPhone unlocked on the Mac's network and paired for wireless development (Xcode Devices and Simulators > Connect via network); the tunnel appears while the PUA runner starts.",
+    "auto": "The iPhone has neither a USB cable listed by usbmux, a CoreDevice tunnel nor a Shelley relay tunnel (transport=auto). Connect the cable, keep the iPhone unlocked on the Mac's network and paired for wireless development (Xcode Devices and Simulators > Connect via network), or bring up Shelley's relay (shelley-cli serve --relay, then shelley-cli wda-launch); the CoreDevice tunnel appears while the PUA runner starts.",
+    "relay": f"No iPhone WDA answers through Shelley's relay tunnel at {relay_address()} (transport=relay). Start the tunnel on this Mac with shelley-cli serve --relay; when it listens but closes connections at once, no phone is connected through the relay: launch WDA with shelley-cli wda-launch and give the phone network access.",
 }
 RECOVERY_COOLDOWN_SECONDS = 120
 PID_PUBLICATION_GRACE_SECONDS = 5
@@ -156,12 +173,33 @@ def usbmux_cabled(udids, socket_path=USBMUXD_SOCKET, timeout=2):
     return cabled
 
 
-def _forward_paths(device, cabled):
+def relay_state(port=None, timeout=0.3):
+    """off: nothing listens on Shelley's tunnel port. waiting: it listens but closes
+    new connections at once, so no iPhone WDA is connected through the relay.
+    connected: a phone WDA is behind it. The probe sends nothing, and the relay
+    does not say which iPhone answers."""
+    try:
+        with socket.create_connection((RELAY_HOST, port or relay_port()), timeout=timeout) as probe:
+            probe.settimeout(timeout)
+            try:
+                return "waiting" if probe.recv(1) == b"" else "connected"
+            except socket.timeout:
+                return "connected"
+            except OSError:
+                return "waiting"
+    except OSError:
+        return "off"
+
+
+def _forward_paths(device, cabled, relay=None):
     """usb: usbmux lists a cable. wifi: CoreDevice reaches the phone on the local
-    network. tunnel: the CoreDevice tunnel is up now (only while a session runs)."""
+    network. tunnel: the CoreDevice tunnel is up now (only while a session runs).
+    relay: an iPhone WDA answers through Shelley's tunnel (one port for the whole
+    Mac, so not tied to this phone; None when it was not probed)."""
     return {"usb": cabled.get(device.get("udid")) if cabled is not None else None,
             "wifi": device.get("transport") == "localNetwork",
-            "tunnel": device.get("tunnel_state") == "connected"}
+            "tunnel": device.get("tunnel_state") == "connected",
+            "relay": relay}
 
 
 def _transport_hint(transport, paths):
@@ -170,9 +208,12 @@ def _transport_hint(transport, paths):
     usb is None when usbmuxd could not be queried; cable-dependent hints are then withheld.
     """
     network = paths["wifi"] or paths["tunnel"]
+    relay = paths.get("relay")
     if transport == "network":
         return None if network else TRANSPORT_HINTS["network"]
-    if paths["usb"] is None or paths["usb"] or (transport == "auto" and network):
+    if transport == "relay":
+        return None if relay else TRANSPORT_HINTS["relay"]
+    if paths["usb"] is None or paths["usb"] or (transport == "auto" and (network or relay)):
         return None
     return TRANSPORT_HINTS.get(transport)
 
@@ -211,7 +252,8 @@ def _diagnose(text):
         # The device forward logs these when the configured transport has no path.
         (("no usb record for the configured",), TRANSPORT_HINTS["usb"]),
         (("no coredevice tunnel to the configured",), TRANSPORT_HINTS["network"]),
-        (("no usb record or coredevice tunnel",), TRANSPORT_HINTS["auto"]),
+        (("no usb record, coredevice tunnel or shelley relay",), TRANSPORT_HINTS["auto"]),
+        (("no shelley relay tunnel (transport=relay)", "shelley relay tunnel closed the connection"), TRANSPORT_HINTS["relay"]),
     ]
     return [hint for needles, hint in cases if any(needle in text for needle in needles)]
 
@@ -318,9 +360,11 @@ class SetupManager:
                 except (ValueError, TypeError, KeyError):
                     pass
             cabled = usbmux_cabled([device.get("udid") for device in devices])
+            relay = relay_state()
             for device in devices:
-                device["forward_paths"] = _forward_paths(device, cabled)
+                device["forward_paths"] = _forward_paths(device, cabled, relay == "connected")
             return {"ok": bool(document) or bool(devices), "devices": devices,
+                    "relay": {"address": relay_address(), "state": relay},
                     "selected_udid": self.config.get("udid"), "error": probe["stderr"] if not probe["ok"] else None,
                     "next_steps": [] if devices else ["Connect iPhone by USB, unlock it, accept Trust This Computer yourself and open Xcode Devices and Simulators."]}
         finally:
@@ -376,7 +420,11 @@ class SetupManager:
         if config and not chosen:
             next_steps.append("Reconnect the selected iPhone by USB, or keep it unlocked on the Mac's Wi-Fi network if Xcode paired it for wireless use, and confirm its UDID in Xcode Devices and Simulators.")
         transport = config.get("transport", DEFAULT_TRANSPORT)
+        relay = discovery.get("relay")
         paths = chosen.get("forward_paths") if chosen else None
+        if paths is None and relay and transport == "relay":
+            # The relay reaches the phone without CoreDevice listing it.
+            paths = _forward_paths({}, None, relay["state"] == "connected")
         hint = _transport_hint(transport, paths) if paths else None
         if hint:
             next_steps.append(hint)
@@ -396,8 +444,8 @@ class SetupManager:
         if mirroring:
             next_steps.append("Quit iPhone Mirroring if the phone shows the Mac-in-use lock screen or WDA has an empty accessibility tree, then verify READY again.")
         return {"ok": all(checks.values()), "checks": checks, "devices": discovery["devices"],
-                "transport": transport, "forward_paths": paths,
-                "transport_note": "auto uses the USB cable whenever usbmux lists it and the CoreDevice tunnel otherwise; usb and network allow only that path. The tunnel is encrypted by CoreDevice and exists while the runner's Xcode session runs; the runner itself still listens on every phone interface.",
+                "transport": transport, "forward_paths": paths, "relay": relay,
+                "transport_note": "auto uses the USB cable whenever usbmux lists it, the CoreDevice tunnel otherwise, and Shelley's relay tunnel when neither exists; usb, network and relay allow only that path. The CoreDevice tunnel is encrypted by CoreDevice and exists while the runner's Xcode session runs. The relay is Shelley's loopback port into the phone's WDA wherever the phone is; it carries WDA's own port only. The runner itself still listens on every phone interface.",
                 "iphone_mirroring_running": mirroring,
                 "selected_device": chosen, "xcode_version": xcode["stdout"].strip(),
                 "developer_dir": developer_dir["stdout"].strip(), "binaries": binaries,

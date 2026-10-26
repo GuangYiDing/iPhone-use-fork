@@ -2,14 +2,37 @@
 // allows. USB uses usbmux's cable record. Wi-Fi uses the CoreDevice tunnel
 // that Xcode keeps to the phone while the runner's test session is active: an
 // encrypted, pairing-authenticated link whose phone-side address devicectl
-// reports. usbmux "Network" records are never used: they are plain TCP on the
-// LAN and disappear once the phone locks.
+// reports. The relay is Shelley's WDA tunnel on this Mac's loopback: the phone's
+// WDA keeps an encrypted connection to Shelley's relay server wherever the phone
+// is, and Shelley forwards every connection to that port into WDA. usbmux
+// "Network" records are never used: they are plain TCP on the LAN and disappear
+// once the phone locks.
 import {execFile} from 'node:child_process';
 import net from 'node:net';
 import {Usbmux, getDefaultSocket} from 'appium-ios-device/build/lib/usbmux/index.js';
 
-export const TRANSPORTS = ['auto', 'usb', 'network'];
+export const TRANSPORTS = ['auto', 'usb', 'network', 'relay'];
+export const RELAY_PATH = 'Shelley relay tunnel';
 const CONNECT_TIMEOUT_MS = 5000;
+const RELAY_HOST = '127.0.0.1';
+// Where Shelley's tunnel listens on this Mac, and the one device port it
+// reaches: the phone end connects every stream to WDA's own port, so other
+// device ports (the MJPEG stream) are not available through it.
+export const RELAY_PORT = portFromEnvironment('WDA_RELAY_PORT', 18101);
+export const RELAY_DEVICE_PORT = portFromEnvironment('WDA_RELAY_DEVICE_PORT', 8100);
+// Shelley's tunnel accepts and closes at once while no phone WDA is connected
+// through the relay, or when the phone could not open the stream. Only the
+// forward can see that, after the connection has been handed over.
+export const RELAY_CLOSED_EARLY = `${RELAY_PATH} closed the connection before answering: no iPhone WDA is connected `
+  + "through Shelley's relay (shelley-cli wda-launch), or the phone refused the stream";
+
+function portFromEnvironment(name, fallback) {
+  const value = process.env[name];
+  if (value === undefined || value === '') return fallback;
+  const number = /^\d+$/.test(value) ? Number(value) : NaN;
+  if (!(number >= 1024 && number <= 65535)) throw new Error(`${name} must be a port between 1024 and 65535.`);
+  return number;
+}
 
 export function parseTransport(value) {
   if (!TRANSPORTS.includes(value)) throw new Error(`Transport must be one of: ${TRANSPORTS.join(', ')}.`);
@@ -63,9 +86,10 @@ export async function findTunnel(udid) {
   return {address, link: connection.transportType ?? 'unknown'};
 }
 
-function openTunnel(address, port) {
+// A plain TCP connection, handed over paused like a usbmux tunnel.
+function connectTcp(host, port) {
   return new Promise((resolve, reject) => {
-    const socket = net.connect({host: address, port});
+    const socket = net.connect({host, port});
     const timer = setTimeout(() => {
       socket.destroy();
       reject(new Error(`timed out after ${CONNECT_TIMEOUT_MS} ms`));
@@ -73,15 +97,41 @@ function openTunnel(address, port) {
     socket.once('error', error => { clearTimeout(timer); reject(error); });
     socket.once('connect', () => {
       clearTimeout(timer);
-      // Hand it over paused, like a usbmux tunnel.
       socket.pause();
       resolve(socket);
     });
   });
 }
 
+// Why the relay cannot serve this device port, or null.
+function relayPortMismatch(port) {
+  return port === RELAY_DEVICE_PORT ? null
+    : `the relay reaches device port ${RELAY_DEVICE_PORT} only, not ${port} (WDA_RELAY_DEVICE_PORT)`;
+}
+
+// Shelley's relay port, or an error naming the step that is missing. The tunnel
+// carries one phone and does not say which, so the UDID is not checked here.
+async function openRelay() {
+  try {
+    return await connectTcp(RELAY_HOST, RELAY_PORT);
+  } catch (error) {
+    throw new Error(error?.code === 'ECONNREFUSED'
+      ? `nothing listens at ${RELAY_HOST}:${RELAY_PORT} (Shelley's WDA tunnel is not running: shelley-cli serve --relay)`
+      : `${RELAY_HOST}:${RELAY_PORT}: ${error?.message ?? error}`);
+  }
+}
+
 export async function connectDevicePort(udid, port, transport) {
   parseTransport(transport);
+  if (transport === 'relay') {
+    const mismatch = relayPortMismatch(port);
+    if (mismatch) throw new Error(`The ${RELAY_PATH} cannot open device port ${port} (transport=relay): ${mismatch}.`);
+    try {
+      return {socket: await openRelay(), path: RELAY_PATH};
+    } catch (error) {
+      throw new Error(`No ${RELAY_PATH} (transport=relay): ${error.message}.`);
+    }
+  }
   if (transport !== 'network') {
     // auto prefers the cable whenever usbmux lists it: unplugging moves new
     // connections to the tunnel, plugging back in returns them to USB.
@@ -91,12 +141,21 @@ export async function connectDevicePort(udid, port, transport) {
   }
   const tunnel = await findTunnel(udid);
   if (!tunnel.address) {
-    throw new Error(transport === 'auto'
-      ? `No USB record or CoreDevice tunnel for the configured iPhone (transport=auto): ${tunnel.reason}.`
-      : `No CoreDevice tunnel to the configured iPhone (transport=network): ${tunnel.reason}.`);
+    if (transport === 'network') throw new Error(`No CoreDevice tunnel to the configured iPhone (transport=network): ${tunnel.reason}.`);
+    // auto: away from the cable and from Xcode, the relay is the last path.
+    let reason = relayPortMismatch(port);
+    if (!reason) {
+      try {
+        return {socket: await openRelay(), path: RELAY_PATH};
+      } catch (error) {
+        reason = error.message;
+      }
+    }
+    throw new Error(`No USB record, CoreDevice tunnel or ${RELAY_PATH} for the configured iPhone (transport=auto): `
+      + `${tunnel.reason}; ${reason}.`);
   }
   try {
-    return {socket: await openTunnel(tunnel.address, port), path: `CoreDevice tunnel (${tunnel.link})`};
+    return {socket: await connectTcp(tunnel.address, port), path: `CoreDevice tunnel (${tunnel.link})`};
   } catch (error) {
     const reason = error?.code === 'ECONNREFUSED' ? 'the port is not listening yet' : (error?.message ?? String(error));
     throw new Error(`CoreDevice tunnel connection to device port ${port} failed: ${reason}`);

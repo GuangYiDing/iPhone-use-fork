@@ -162,11 +162,14 @@ The `transport` option of `pua_setup(action="configure", ...)` selects the path:
 
 | Value | Behavior |
 | --- | --- |
-| `auto` (default) | USB whenever usbmux lists the cable, otherwise the CoreDevice tunnel. Each new connection chooses again, so unplugging switches to the tunnel and plugging back in returns to USB |
+| `auto` (default) | USB whenever usbmux lists the cable, otherwise the CoreDevice tunnel, and Shelley's relay tunnel when neither exists. Each new connection chooses again, so unplugging switches to the tunnel and plugging back in returns to USB |
 | `usb` | Cable only |
 | `network` | CoreDevice tunnel only |
+| `relay` | Shelley's relay tunnel only: `127.0.0.1:18101` on the Mac (`WDA_RELAY_PORT` overrides it), which Shelley forwards into the phone's WDA wherever the phone is |
 
-Stop a running start job before changing `transport`; changing it does not require a rebuild. `forward_paths` in `pua_doctor` reports `usb` (usbmux sees the cable), `wifi` (Xcode reaches the phone over the local network), and `tunnel` (the tunnel is connected; it exists only while WDA runs). Measured on one local network: `/status` round trips take about 2 ms over USB and 25 ms through the tunnel; through the tunnel a 1 MB screenshot takes about 0.4 s and the preview runs at about 9.7 fps, close to USB.
+Stop a running start job before changing `transport`; changing it does not require a rebuild. `forward_paths` in `pua_doctor` reports `usb` (usbmux sees the cable), `wifi` (Xcode reaches the phone over the local network), `tunnel` (the tunnel is connected; it exists only while WDA runs) and `relay` (a phone WDA answers through Shelley's relay). Measured on one local network: `/status` round trips take about 2 ms over USB and 25 ms through the tunnel; through the tunnel a 1 MB screenshot takes about 0.4 s and the preview runs at about 9.7 fps, close to USB.
+
+`relay` needs Shelley's tunnel on the Mac (`shelley-cli serve --relay …`) and WDA launched on the phone with `shelley-cli wda-launch`. When nothing listens on the port, or the tunnel closes the connection at once (no phone WDA is connected through the relay), the forward log names the missing step. It carries WDA's own port only (8100 by default, `WDA_RELAY_DEVICE_PORT`); the preview stream's 9100 does not go through it.
 
 CoreDevice encrypts the tunnel and authenticates it with the Xcode pairing. `transport` only restricts the path iPhone Use itself takes, though: a running WDA listens on every network interface of the phone without authentication, so other devices on the same network may still reach its ports directly. On office or public networks, stop WDA when you are done.
 
