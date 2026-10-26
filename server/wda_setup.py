@@ -445,7 +445,7 @@ class SetupManager:
             next_steps.append("Quit iPhone Mirroring if the phone shows the Mac-in-use lock screen or WDA has an empty accessibility tree, then verify READY again.")
         return {"ok": all(checks.values()), "checks": checks, "devices": discovery["devices"],
                 "transport": transport, "forward_paths": paths, "relay": relay,
-                "transport_note": "auto uses the USB cable whenever usbmux lists it, the CoreDevice tunnel otherwise, and Shelley's relay tunnel when neither exists; usb, network and relay allow only that path. The CoreDevice tunnel is encrypted by CoreDevice and exists while the runner's Xcode session runs. The relay is Shelley's loopback port into the phone's WDA wherever the phone is; it carries WDA's own port only. The runner itself still listens on every phone interface.",
+                "transport_note": "auto uses the USB cable whenever usbmux lists it, the CoreDevice tunnel otherwise, and Shelley's relay tunnel when neither exists; usb, network and relay allow only that path. The CoreDevice tunnel is encrypted by CoreDevice and exists while the runner's Xcode session runs. The relay is Shelley's loopback port into the phone's WDA wherever the phone is; it carries WDA's own port only, and start then runs the forward without an Xcode session. The runner itself still listens on every phone interface.",
                 "iphone_mirroring_running": mirroring,
                 "selected_device": chosen, "xcode_version": xcode["stdout"].strip(),
                 "developer_dir": developer_dir["stdout"].strip(), "binaries": binaries,
@@ -978,10 +978,16 @@ def _worker(state_dir, job_id, owner_token, base_url):
                 time.sleep(0.15)
                 if forward_child.poll() is not None:
                     raise RuntimeError("Device forward failed to start; inspect the log tail.")
-                xcode = launch(manager._build_command(config, "test-without-building"), source)
+                if config.get("transport", DEFAULT_TRANSPORT) == "relay":
+                    # Shelley launched WDA on the phone and keeps it behind the
+                    # relay, so this job owns the forward only: an Xcode session
+                    # would relaunch the runner without Shelley's relay settings.
+                    owned = [forward_child]
+                else:
+                    owned = [forward_child, launch(manager._build_command(config, "test-without-building"), source)]
                 next_status_probe = 0
-                # Keep both children owned and watch either side fail.
-                while not stopping and all(child.poll() is None for child in (forward_child, xcode)):
+                # Keep the owned children and watch any of them fail.
+                while not stopping and all(child.poll() is None for child in owned):
                     if action == "recover" and job.get("recovery_phase") == "starting" and time.monotonic() >= next_status_probe:
                         # The old listener/group exited before these children
                         # were launched. A ready status now belongs to the new

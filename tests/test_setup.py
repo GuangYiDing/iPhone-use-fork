@@ -180,6 +180,33 @@ class SetupTests(unittest.TestCase):
         # The relay is one port for the whole Mac, so every listed phone gets the same answer.
         self.assertEqual(wda_setup._forward_paths(devices[1], None, True)["relay"], True)
 
+    def test_start_in_relay_mode_owns_only_the_forward(self):
+        # Shelley launched WDA and keeps it behind the relay: no Xcode session here.
+        self.assertTrue(self.configure(local_port=self.manager.port, transport="relay")["ok"])
+        job = self.job()
+        job.update(config=self.manager.config, pid=os.getpid(), owner_token="fixture-worker", state="queued")
+        wda_setup._write_json(self.manager._job_path(job["id"]), job)
+        forward = self.manager.state_dir / "runtime/forward"
+        (forward / "node_modules/appium-ios-device").mkdir(parents=True)
+        lock_hash = wda_setup.hashlib.sha256((wda_setup.PLUGIN_ROOT / "tooling/package-lock.json").read_bytes()).hexdigest()
+        wda_setup._write_json(forward / "installed.json", {"lock_hash": lock_hash})
+        child = MagicMock()
+        child.stdout = io.StringIO("")
+        child.poll.side_effect = [None, None, 1, 1]
+        with patch.object(wda_setup.SetupManager, "_source", return_value=Path(self.temp.name)), \
+             patch.object(wda_setup.subprocess, "Popen", side_effect=[child]) as launch, \
+             patch.object(wda_setup.signal, "signal"), \
+             patch.object(wda_setup.os, "getpgrp", return_value=-1), \
+             patch.object(wda_setup.time, "sleep"):
+            result = wda_setup._worker(str(self.manager.state_dir), job["id"], job["owner_token"], self.manager.base_url)
+        self.assertEqual(result, 1)  # The fake forward exits after proving launch.
+        launch.assert_called_once()
+        self.assertEqual(launch.call_args.args[0][0], "node")
+        self.assertEqual(launch.call_args.args[0][-1], "relay")
+        stored = wda_setup._read_json(self.manager._job_path(job["id"]))
+        self.assertEqual(stored["state"], "failed")
+        self.assertIn("device forward exited", stored["error"])
+
     def test_relay_state_tells_a_missing_tunnel_an_empty_one_and_a_phone_apart(self):
         def listener(hold):
             server = socket.create_server(("127.0.0.1", 0))

@@ -164,7 +164,7 @@ sh scripts/install.sh
 
 修改 `transport` 前先停止正在运行的 start 工作，改完不需要重新 build。`pua_doctor` 的 `forward_paths` 显示 `usb`（usbmux 看到数据线）、`wifi`（Xcode 能经局域网找到手机）、`tunnel`（隧道已连接，只在 WDA 运行期间存在）和 `relay`（有手机的 WDA 经 Shelley 的中继应答）。同一局域网实测：`/status` 往返 USB 约 2 ms、隧道约 25 ms；隧道下 1 MB 截图约 0.4 秒，预览约 9.7 fps，与 USB 接近。
 
-`relay` 要先在 Mac 上起 Shelley 的隧道（`shelley-cli serve --relay …`），再用 `shelley-cli wda-launch` 拉起手机里的 WDA。端口没人听、或者连上就被断开（手机的 WDA 没经中继连上），转发日志都会写明是哪一步不通。它只通 WDA 自己的端口（默认 8100，环境变量 `WDA_RELAY_DEVICE_PORT`），预览流的 9100 不经它。
+`relay` 要先在 Mac 上起 Shelley 的隧道（`shelley-cli serve --relay …`），再用 `shelley-cli wda-launch` 拉起手机里的 WDA。端口没人听、或者连上就被断开（手机的 WDA 没经中继连上），转发日志都会写明是哪一步不通。它只通 WDA 自己的端口（默认 8100，环境变量 `WDA_RELAY_DEVICE_PORT`），预览流的 9100 不经它。`relay` 模式下 `start` 只起本机转发、不起 Xcode 会话：手机里的 WDA 由 Shelley 拉起和看管，Xcode 会话会把它换成没有中继设置的 runner。
 
 隧道由 CoreDevice 加密，并用 Xcode 的配对认证。不过 `transport` 只限定 iPhone Use 自己走的路径：WDA 运行时本身会在手机的所有网卡上监听、没有认证，同一网络里的其他设备仍可能直接访问它的端口。在公司或公共网络中，用完请停止 WDA。
 
